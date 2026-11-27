@@ -12,7 +12,8 @@ license = { text = "MIT" }
 dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.4"]
+# statsmodels is only the reference implementation in tests/test_impact.py
+dev = ["pytest>=7", "ruff>=0.4", "statsmodels>=0.14"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/causal"]

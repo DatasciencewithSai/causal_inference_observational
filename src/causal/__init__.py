@@ -1,6 +1,7 @@
 """causal: causal inference for observational data and quasi-experiments."""
 
 from causal.did import diff_in_diff
+from causal.impact import CausalImpactResult, causal_impact
 from causal.propensity import (
     ipw_ate,
     ipw_weights,
@@ -9,6 +10,8 @@ from causal.propensity import (
 )
 
 __all__ = [
+    "CausalImpactResult",
+    "causal_impact",
     "diff_in_diff",
     "ipw_ate",
     "ipw_weights",

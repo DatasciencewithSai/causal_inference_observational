@@ -12,9 +12,10 @@ Sister repos: [experimentation_ab_testing](https://github.com/DatasciencewithSai
 |---|---|---|
 | `causal.did` | Difference-in-differences (2x2), cluster-robust SEs | Parallel trends |
 | `causal.propensity` | Propensity scores, IPW average treatment effect, covariate balance (SMD) | No unmeasured confounding, overlap |
+| `causal.impact` | CausalImpact-style time-series counterfactual (local level + control series, exact Bayesian intervals) | Controls unaffected; pre-period relationship holds |
 
 Planned (see [docs/ROADMAP.md](docs/ROADMAP.md)): event-study DiD, synthetic control, market matching,
-regression discontinuity, Bayesian structural time series (CausalImpact-style), matching estimators.
+regression discontinuity, matching estimators.
 
 ## Install
 
@@ -26,6 +27,7 @@ pip install -e ".[dev]"
 
 ```python
 from causal import (
+    causal_impact,
     diff_in_diff,
     ipw_ate,
     propensity_scores,
@@ -40,6 +42,10 @@ diff_in_diff(y, treated=is_treated_group, post=is_after_launch, clusters=unit_id
 ipw_ate(y, treated, X=covariates)  # ATE with bootstrap CI
 ps = propensity_scores(covariates, treated)
 standardized_mean_differences(covariates, treated, ipw_weights(ps, treated))  # balance check
+
+# CausalImpact-style: one treated series, control series the intervention didn't touch
+r = causal_impact(y_market, X=control_markets, n_pre=70)  # first 70 steps are pre-period
+r.effect, r.ci_low, r.ci_high, r.cumulative, r.relative_effect
 ```
 
 ## Visual explainers
@@ -48,6 +54,10 @@ standardized_mean_differences(covariates, treated, ipw_weights(ps, treated))  # 
 regression (`did_pre_post.mp4`). Every number on screen comes from `did_numbers.py`, which
 simulates the store panel and runs `diff_in_diff`. Re-render with `node render.js` from that
 folder (Playwright + ffmpeg).
+
+`visuals/causal_impact/` is a one-minute animated explainer of CausalImpact (`causal_impact.mp4`).
+Every number on screen comes from `impact_numbers.py`, which simulates the campaign and runs
+`causal_impact`. Re-render with `node render.js` from that folder (Playwright + ffmpeg).
 
 ## Development
 
