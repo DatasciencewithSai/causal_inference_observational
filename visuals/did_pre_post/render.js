@@ -1,16 +1,16 @@
 // Render an explainer page to MP4 (30 fps, H.264) frame by frame. Default page: did_pre_post.html (1080x1350).
+// Copied from experimentation_ab_testing/visuals/ab_test_flow/render.js.
 // Usage: [PAGE=page.html] node render.js [out.mp4] [fps]  |  [PAGE=page.html] node render.js --stills dir t1 t2 ...
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// copied from experimentation_ab_testing/visuals/ab_test_flow/render.js
 const page_url = 'file://' + path.join(__dirname, process.env.PAGE || 'did_pre_post.html') + '?render=1';
 
 (async () => {
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1080, height: 1080 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 1 });
   await page.goto(page_url);
   await page.evaluate(() => window.ready);
 

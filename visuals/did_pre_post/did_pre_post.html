@@ -44,6 +44,7 @@ const MONO = '"JetBrains Mono", monospace';
 
 // Every number comes from did_numbers.py (simulated panel, causal.diff_in_diff, store-clustered SE).
 // 80 stores x 16 weeks, launch at week 9; true effect in the simulation = +8.
+// Placebo pre-trend DiD (fake launch wk 5, pre weeks only): +0.60, p = 0.53.
 const WEEKS = 16, LAUNCH = 9;
 const WC = [100.6,102.0,103.4,105.7,106.0,106.1,108.3,109.9,109.3,112.0,112.9,114.6,114.5,117.7,117.1,121.6]; // control
 const WT = [119.3,121.9,122.3,124.4,124.3,126.8,128.3,129.5,137.8,138.6,142.2,144.3,143.9,144.0,144.6,145.6]; // treated
@@ -55,7 +56,6 @@ const clamp = (x, a=0, b=1) => Math.max(a, Math.min(b, x));
 const lerp = (a, b, k) => a + (b - a) * k;
 const eio = k => k < .5 ? 4*k*k*k : 1 - Math.pow(-2*k + 2, 3) / 2;
 const eout = k => 1 - Math.pow(1 - k, 3);
-const eback = k => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3*Math.pow(k-1,3) + c1*Math.pow(k-1,2); };
 const lin = k => k;
 const P = (t, a, b, f=eio) => f(clamp((t - a) / (b - a)));
 
@@ -137,9 +137,8 @@ function seg(x0, y0, x1, y1, k, color, lw, dash){
   ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; if (dash) ctx.setLineDash(dash);
   ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(lerp(x0, x1, k), lerp(y0, y1, k)); ctx.stroke(); ctx.restore();
 }
-function dot(x, y, r, color, ring){
-  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fillStyle = ring ? '#fff' : color; ctx.fill();
-  if (ring){ ctx.lineWidth = 3; ctx.strokeStyle = color; ctx.stroke(); }
+function dot(x, y, r, color){
+  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fillStyle = color; ctx.fill();
   ctx.restore();
 }
 
@@ -229,7 +228,7 @@ function weekChart(g, o){
   });
   if (o.shade > 0){
     ctx.save(); ctx.globalAlpha *= o.shade; ctx.beginPath();
-    for (let w = LAUNCH - 1; w <= WEEKS; w++){ const v = w < LAUNCH ? WT[w-1] : WT[w-1]; w === LAUNCH - 1 ? ctx.moveTo(X(w), Y(v)) : ctx.lineTo(X(w), Y(v)); }
+    for (let w = LAUNCH - 1; w <= WEEKS; w++){ const v = WT[w-1]; w === LAUNCH - 1 ? ctx.moveTo(X(w), Y(v)) : ctx.lineTo(X(w), Y(v)); }
     for (let w = WEEKS; w >= LAUNCH - 1; w--){ const v = w < LAUNCH ? WT[w-1] : WC[w-1] + GAP; ctx.lineTo(X(w), Y(v)); }
     ctx.closePath(); ctx.fillStyle = 'rgba(47,91,255,.18)'; ctx.fill(); ctx.restore();
   }
@@ -392,25 +391,27 @@ function cReg(lt){
 }
 
 function cPicture(lt){
-  const g = { x0:62, x1:400, y0:88, y1:206, lo:95, hi:160, ticks:[100, 130, 160] };
+  const g = { x0:62, x1:396, y0:88, y1:216, lo:98, hi:150, ticks:[100, 125, 150] };
   const m = weekChart(g, { axis:1, launch:1, launchLabel:false, k: 1 + 15 * P(lt, .1, .9, lin), cf:P(lt, 1.0, 2.4, lin), shade:P(lt, 2.6, 3.2) });
-  alpha(P(lt, 1.6, 2.0), () => text('dashed = no free delivery', (m.xl + g.x1)/2 + 4, m.Y(124), { size:11, w:600, color:C.text, align:'center' }));
+  alpha(P(lt, 1.6, 2.0), () => text('dashed = no free delivery', (m.xl + g.x1)/2 + 4, m.Y(121.5), { size:11, w:600, color:C.text, align:'center' }));
   // bracket for the effect at week 16
   alpha(P(lt, 3.0, 3.4), () => {
-    const x = g.x1 + 10, ya = m.Y(WT[WEEKS-1]), yb = m.Y(WC[WEEKS-1] + GAP);
-    ctx.save(); ctx.strokeStyle = C.B; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 4, ya); ctx.lineTo(x, ya); ctx.lineTo(x, yb); ctx.lineTo(x - 4, yb); ctx.stroke(); ctx.restore();
-    text('+8.3', x + 6, (ya + yb)/2 + 5, { size:15, w:800, color:C.B });
+    // average after launch: treated 142.6 vs counterfactual 115.0 + 19.3 = 134.3 -> +8.3
+    const x = g.x1 + 12, ya = m.Y(CELL.Tpost), yb = m.Y(CELL.Cpost + GAP);
+    ctx.save(); ctx.strokeStyle = C.B; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 5, ya); ctx.lineTo(x, ya); ctx.lineTo(x, yb); ctx.lineTo(x - 5, yb); ctx.stroke(); ctx.restore();
+    text('avg', x + 6, (ya + yb)/2 - 6, { size:11, w:700, font:MONO, color:C.muted });
+    text('+8.3', x + 6, (ya + yb)/2 + 12, { size:15, w:800, color:C.B });
   });
   alpha(P(lt, 3.6, 4.0, eout), () => {
-    const w = chip('parallel before', 64, 92, { size:12, font:SANS, w:700, color:C.green, fill:'rgba(15,138,95,.10)', stroke:'rgba(15,138,95,.45)', h:24, padX:28 });
-    check(78, 104, 14, C.green, P(lt, 3.8, 4.2), 2.5);
+    chip('pre-trends p=0.53', 60, 92, { size:12, font:SANS, w:700, color:C.green, fill:'rgba(15,138,95,.10)', stroke:'rgba(15,138,95,.45)', h:24, padX:27 });
+    check(75, 104, 14, C.green, P(lt, 3.8, 4.2), 2.5);
   });
-  [['+8.3', 'orders/store/wk', C.B], ['+6.2%', 'vs counterfactual', C.B], ['2.2×', 'naive pre/post overstates', C.amber]].forEach(([v, k, col], i) => {
+  [['+8.3', 'orders/store/wk', C.B], ['+6.2%', 'vs counterfactual', C.B], ['2.2×', 'naive overstates', C.amber]].forEach(([v, k, col], i) => {
     alpha(P(lt, 4.4 + i*.3, 4.9 + i*.3, eout), () => {
       const w = 135, x = 24 + i * (w + 10);
       card(x, 248, w, 64, { fill:C.card2, r:12, stroke:'none' });
       text(v, x + w/2, 276, { size:22, w:800, align:'center', color:col });
-      text(k, x + w/2, 299, { size: i === 2 ? 11 : 12, w:500, align:'center', color:C.muted });
+      text(k, x + w/2, 299, { size:12, w:500, align:'center', color:C.muted });
     });
   });
 }
@@ -445,7 +446,7 @@ function block(i, t){
       ctx.save(); ctx.strokeStyle = 'rgba(140,132,118,.35)'; ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
       rr(24, 82, BW - 48, BH - 106, 12); ctx.stroke(); ctx.restore();
     } else {
-      CONTENT[i](t - s, state === 'active');
+      CONTENT[i](t - s);
     }
     ctx.restore();
   });
@@ -470,7 +471,7 @@ function connectors(t){
     const sg = Math.min(4, Math.floor(tr * 5)), f = tr * 5 - sg, pts = CONN[sg];
     const at = polyAt(pts, polyLen(pts) * eio(f));
     ctx.save(); const g = ctx.createRadialGradient(at.p[0], at.p[1], 0, at.p[0], at.p[1], 22);
-    g.addColorStop(0, 'rgba(47,91,255,.85)'); g.addColorStop(1, 'rgba(47,91,255,0)');
+    g.addColorStop(0, 'rgba(21,23,28,.7)'); g.addColorStop(1, 'rgba(21,23,28,0)');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(at.p[0], at.p[1], 22, 0, Math.PI*2); ctx.fill(); ctx.restore();
   }
 }

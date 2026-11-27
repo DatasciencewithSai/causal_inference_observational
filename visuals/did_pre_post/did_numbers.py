@@ -42,3 +42,8 @@ print("weekly means:")
 for g in (0, 1):
     means = [float(round(y[(treated == g) & (week == w)].mean(), 1)) for w in range(1, WEEKS + 1)]
     print(" ", "T" if g else "C", means)
+
+# Placebo pre-trend check: pretend launch was week 5, using pre-launch weeks only.
+pre = week < LAUNCH
+fake = diff_in_diff(y[pre], treated[pre], (week[pre] >= 5).astype(int), clusters=store[pre])
+print(f"placebo DiD (wk 5, pre only) {fake.att:+.2f}  p {fake.p_value:.2f}")
