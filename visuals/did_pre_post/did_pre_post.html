@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DiD Pre/Post Paper</title>
+<style>
+  :root { --bg:#ECE8DE; --fg:#15171C; --muted:#6B675F; --accent:#15171C; --panel:#FFFFFF; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#ECE8DE; } }
+  :root[data-theme="dark"] { --bg:#ECE8DE; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font-family: Inter, system-ui, sans-serif; }
+  .wrap { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:16px; }
+  canvas { width:min(92vw, calc(82vh * 0.8)); aspect-ratio:4/5; height:auto; border-radius:14px; box-shadow:0 20px 60px rgba(21,23,28,.18); display:block; }
+  .controls { width:min(92vw, calc(82vh * 0.8)); display:flex; align-items:center; gap:12px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid #E3DDD1; border-radius:8px; padding:8px 14px; font:600 14px Inter, sans-serif; cursor:pointer; min-width:84px; }
+  input[type=range] { flex:1; accent-color:var(--accent); }
+  .time { font:500 13px "JetBrains Mono", monospace; color:var(--muted); min-width:92px; text-align:right; }
+  body.render .controls { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="c" width="1080" height="1350" aria-label="One-page animated explainer of pre/post analysis with a difference-in-differences regression"></canvas>
+  <div class="controls">
+    <button id="play">Pause</button>
+    <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Timeline">
+    <span class="time" id="time">0.0s</span>
+  </div>
+</div>
+<script>
+(() => {
+const W = 1080, H = 1350;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const C = {
+  card:'#FFFFFF', card2:'#F3F0E9', line:'#E3DDD1',
+  text:'#15171C', muted:'#6B675F', dim:'#B3AC9F',
+  A:'#8F897E', B:'#2F5BFF', green:'#0F8A5F', amber:'#B86200'
+};
+const SANS = 'Inter, system-ui, sans-serif';
+const MONO = '"JetBrains Mono", monospace';
+
+// Every number comes from did_numbers.py (simulated panel, causal.diff_in_diff, store-clustered SE).
+// 80 stores x 16 weeks, launch at week 9; true effect in the simulation = +8.
+// Placebo pre-trend DiD (fake launch wk 5, pre weeks only): +0.60, p = 0.53.
+const WEEKS = 16, LAUNCH = 9;
+const WC = [100.6,102.0,103.4,105.7,106.0,106.1,108.3,109.9,109.3,112.0,112.9,114.6,114.5,117.7,117.1,121.6]; // control
+const WT = [119.3,121.9,122.3,124.4,124.3,126.8,128.3,129.5,137.8,138.6,142.2,144.3,143.9,144.0,144.6,145.6]; // treated
+const CELL = { Cpre:105.3, Cpost:115.0, Tpre:124.6, Tpost:142.6 };
+const GAP = 19.3; // beta1: treated - control before launch; counterfactual = control + GAP
+
+// ---------- helpers ----------
+const clamp = (x, a=0, b=1) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const eio = k => k < .5 ? 4*k*k*k : 1 - Math.pow(-2*k + 2, 3) / 2;
+const eout = k => 1 - Math.pow(1 - k, 3);
+const lin = k => k;
+const P = (t, a, b, f=eio) => f(clamp((t - a) / (b - a)));
+
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function alpha(a, fn){ if (a <= 0.001) return; ctx.save(); ctx.globalAlpha *= clamp(a); fn(); ctx.restore(); }
+function text(s, x, y, o={}){
+  ctx.save();
+  ctx.font = `${o.w||500} ${o.size||20}px ${o.font||SANS}`;
+  ctx.fillStyle = o.color || C.text;
+  ctx.textAlign = o.align || 'left';
+  ctx.textBaseline = o.base || 'alphabetic';
+  if (o.ls) ctx.letterSpacing = o.ls + 'px';
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function measure(s, size, w=500, font=SANS){ ctx.save(); ctx.font = `${w} ${size}px ${font}`; const m = ctx.measureText(s).width; ctx.restore(); return m; }
+function card(x, y, w, h, o={}){
+  ctx.save(); rr(x, y, w, h, o.r || 18);
+  ctx.fillStyle = o.fill || C.card; ctx.fill();
+  if (o.stroke !== 'none'){ ctx.lineWidth = o.lw || 1.5; ctx.strokeStyle = o.stroke || C.line; ctx.stroke(); }
+  ctx.restore();
+}
+function chip(s, x, y, o={}){
+  const size = o.size || 14, padX = o.padX || 12, h = o.h || size + 14;
+  const w = measure(s, size, o.w || 600, o.font || MONO) + padX * 2 + (o.ls ? s.length * o.ls : 0);
+  const x0 = o.align === 'center' ? x - w / 2 : o.align === 'right' ? x - w : x;
+  ctx.save(); rr(x0, y, w, h, h / 2); ctx.fillStyle = o.fill || C.card2; ctx.fill();
+  if (o.stroke){ ctx.strokeStyle = o.stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+  ctx.restore();
+  text(s, x0 + w / 2, y + h / 2 + 1, { size, w:o.w||600, font:o.font||MONO, color:o.color||C.muted, align:'center', base:'middle', ls:o.ls });
+  return w;
+}
+const warn = (s, x, y) => chip(s, x, y, { size:13, font:SANS, w:700, color:C.amber, fill:'rgba(184,98,0,.12)', stroke:'rgba(184,98,0,.55)', h:28 });
+function truck(x, y, s, color){
+  ctx.save(); ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, s*.1); ctx.lineJoin = 'round';
+  rr(x - .6*s, y - .38*s, .72*s, .58*s, .06*s); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x + .16*s, y - .18*s); ctx.lineTo(x + .42*s, y - .18*s); ctx.lineTo(x + .6*s, y + .02*s); ctx.lineTo(x + .6*s, y + .2*s); ctx.lineTo(x + .16*s, y + .2*s); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(x - .36*s, y + .28*s, .13*s, 0, Math.PI*2); ctx.arc(x + .38*s, y + .28*s, .13*s, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function storeIcon(x, y, s, color){
+  ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = Math.max(1.5, s*.1); ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(x - .55*s, y - .1*s); ctx.lineTo(x - .45*s, y - .45*s); ctx.lineTo(x + .45*s, y - .45*s); ctx.lineTo(x + .55*s, y - .1*s); ctx.closePath(); ctx.fill();
+  ctx.strokeRect(x - .45*s, y - .1*s, .9*s, .55*s);
+  ctx.fillRect(x - .12*s, y + .12*s, .24*s, .33*s);
+  ctx.restore();
+}
+function pill(cx, cy, w, h, v, label, o={}){
+  const press = o.press || 0, sc = 1 - press * .06;
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc);
+  if (v === 'T'){ ctx.shadowColor = 'rgba(47,91,255,.35)'; ctx.shadowBlur = 18 * (o.glow == null ? 1 : o.glow); ctx.shadowOffsetY = 4; }
+  else { ctx.shadowColor = 'rgba(21,23,28,.10)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4; }
+  rr(-w/2, -h/2, w, h, h * .22); ctx.fillStyle = v === 'T' ? C.B : '#FFFFFF'; ctx.fill();
+  ctx.shadowColor = 'transparent';
+  if (v === 'C'){ ctx.strokeStyle = '#CFC8BB'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  const fs = o.fs || h * .36, tw = measure(label, fs, 700), icon = fs * 1.2, gap = fs * .55, total = icon + gap + tw;
+  const fg = v === 'T' ? '#FFFFFF' : '#111827';
+  (v === 'T' ? truck : storeIcon)(-total/2 + icon/2, -fs*.05, icon, fg);
+  text(label, -total/2 + icon + gap, 1, { size:fs, w:700, color:fg, base:'middle' });
+  ctx.restore();
+}
+function check(x, y, s, color, k=1, lw){
+  if (k <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw || s * .16; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const p = [[-.42,.02],[-.12,.32],[.45,-.3]];
+  const l1 = Math.hypot(.3,.3), l2 = Math.hypot(.57,.62), d = k * (l1 + l2);
+  ctx.beginPath(); ctx.moveTo(x + p[0][0]*s, y + p[0][1]*s);
+  if (d <= l1){ const f = d/l1; ctx.lineTo(x + lerp(p[0][0],p[1][0],f)*s, y + lerp(p[0][1],p[1][1],f)*s); }
+  else { ctx.lineTo(x + p[1][0]*s, y + p[1][1]*s); const f = (d-l1)/l2; ctx.lineTo(x + lerp(p[1][0],p[2][0],f)*s, y + lerp(p[1][1],p[2][1],f)*s); }
+  ctx.stroke(); ctx.restore();
+}
+function strike(x0, x1, y, k, color){
+  if (k <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(lerp(x0, x1, k), y); ctx.stroke(); ctx.restore();
+}
+function seg(x0, y0, x1, y1, k, color, lw, dash){
+  if (k <= 0) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; if (dash) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(lerp(x0, x1, k), lerp(y0, y1, k)); ctx.stroke(); ctx.restore();
+}
+function dot(x, y, r, color){
+  ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+
+// ---------- layout ----------
+const MX = 48, GAP_X = 36, BW = (W - 2*MX - GAP_X) / 2;   // 474
+const BH = 330, ROWS = [218, 594, 970];
+const BLOCKS = [
+  { title:'The setup',          sub:'Who got it, and when?' },
+  { title:'Before vs after',    sub:'Trap #1', trap:true },
+  { title:'Treated vs control', sub:'Trap #2', trap:true },
+  { title:'Difference twice',   sub:'The 2×2 table' },
+  { title:'As a regression',    sub:'OLS · store-clustered SE' },
+  { title:'Picture it',         sub:'The counterfactual' },
+].map((b, i) => ({ ...b, x: MX + (i % 2) * (BW + GAP_X), y: ROWS[Math.floor(i / 2)] }));
+const TIMES = [[2.5, 10], [10, 19], [19, 28], [28, 37], [37, 46], [46, 54]];
+const TOTAL = 60;
+
+const CONN = [];
+for (let i = 0; i < 5; i++){
+  const a = BLOCKS[i], b = BLOCKS[i+1];
+  if (i % 2 === 0){ const y = a.y + BH/2; CONN.push([[a.x + BW, y], [b.x, y]]); }
+  else {
+    const gy = a.y + BH + (b.y - a.y - BH) / 2;
+    CONN.push([[a.x + BW/2, a.y + BH], [a.x + BW/2, gy], [b.x + BW/2, gy], [b.x + BW/2, b.y]]);
+  }
+}
+function polyLen(pts){ let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]); return L; }
+function polyAt(pts, d){
+  for (let i = 1; i < pts.length; i++){
+    const s = Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]);
+    if (d <= s || i === pts.length - 1){ const f = clamp(d / s); return { p:[lerp(pts[i-1][0], pts[i][0], f), lerp(pts[i-1][1], pts[i][1], f)], ang: Math.atan2(pts[i][1]-pts[i-1][1], pts[i][0]-pts[i-1][0]), seg:i }; }
+    d -= s;
+  }
+}
+function drawPoly(pts, k){
+  const L = polyLen(pts), at = polyAt(pts, L * k);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < at.seg; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.lineTo(at.p[0], at.p[1]); ctx.stroke();
+  return at;
+}
+function arrowHead(p, ang, color, s=10){
+  ctx.save(); ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+  ctx.lineTo(p[0] - s*Math.cos(ang - .5), p[1] - s*Math.sin(ang - .5));
+  ctx.lineTo(p[0] - s*Math.cos(ang + .5), p[1] - s*Math.sin(ang + .5)); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+// ---------- background & header ----------
+function background(){
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#F6F3EC'); g.addColorStop(1, '#ECE8DE');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  const rg = ctx.createRadialGradient(W*.85, 60, 10, W*.85, 60, 640);
+  rg.addColorStop(0, 'rgba(255,255,255,.75)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(21,23,28,.045)';
+  for (let x = 30; x < W; x += 36) for (let y = 30; y < H; y += 36) ctx.fillRect(x, y, 2, 2);
+}
+function header(t){
+  chip('DIFFERENCE-IN-DIFFERENCES, VISUALLY', MX, 40, { size:15, color:C.text, fill:'rgba(21,23,28,.06)', ls:2, h:30 });
+  text('Pre/post, done right', MX, 128, { size:50, w:800, ls:-1.2 });
+  text('Free delivery in 40 stores  ·  Metric: orders / store / week', MX, 172, { size:21, w:500, color:C.muted });
+  const flip = Math.floor(t / 1.2) % 2;
+  pill(912, 72, 220, 46, 'C', 'No change', { fs:17, press: flip === 0 ? .15 : 0 });
+  pill(912, 132, 220, 46, 'T', 'Free delivery', { fs:17, glow:.6, press: flip === 1 ? .15 : 0 });
+  text('C', 786, 79, { size:16, w:700, font:MONO, color:C.muted, align:'center' });
+  text('T', 786, 139, { size:16, w:700, font:MONO, color:C.B, align:'center' });
+}
+
+// ---------- shared weekly chart ----------
+function weekChart(g, o){
+  // g: {x0,x1,y0,y1,lo,hi}; o: {k: weeks drawn (0..16), axis: alpha, cf: 0..1, shade: 0..1}
+  const X = w => lerp(g.x0, g.x1, (w - 1)/(WEEKS - 1)), Y = v => lerp(g.y1, g.y0, (v - g.lo)/(g.hi - g.lo));
+  const xl = (X(LAUNCH - 1) + X(LAUNCH)) / 2;
+  alpha(o.axis, () => {
+    ctx.save(); ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+    g.ticks.forEach(v => { ctx.beginPath(); ctx.moveTo(g.x0, Y(v)); ctx.lineTo(g.x1, Y(v)); ctx.stroke();
+      text(String(v), g.x0 - 8, Y(v) + 4, { size:11, w:500, font:MONO, color:C.dim, align:'right' }); });
+    ctx.restore();
+    text('BEFORE', (g.x0 + xl)/2, g.y1 + 20, { size:11, w:700, font:MONO, color:C.muted, align:'center', ls:1 });
+    text('AFTER', (xl + g.x1)/2, g.y1 + 20, { size:11, w:700, font:MONO, color:C.muted, align:'center', ls:1 });
+  });
+  alpha(o.launch, () => {
+    ctx.save(); ctx.strokeStyle = C.text; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xl, g.y0 - 4); ctx.lineTo(xl, g.y1 + 6); ctx.stroke(); ctx.restore();
+    if (o.launchLabel) text('launch · wk 9', xl + 6, g.y0 + 8, { size:11, w:700, font:MONO, color:C.text });
+  });
+  if (o.shade > 0){
+    ctx.save(); ctx.globalAlpha *= o.shade; ctx.beginPath();
+    for (let w = LAUNCH - 1; w <= WEEKS; w++){ const v = WT[w-1]; w === LAUNCH - 1 ? ctx.moveTo(X(w), Y(v)) : ctx.lineTo(X(w), Y(v)); }
+    for (let w = WEEKS; w >= LAUNCH - 1; w--){ const v = w < LAUNCH ? WT[w-1] : WC[w-1] + GAP; ctx.lineTo(X(w), Y(v)); }
+    ctx.closePath(); ctx.fillStyle = 'rgba(47,91,255,.18)'; ctx.fill(); ctx.restore();
+  }
+  if (o.cf > 0){
+    ctx.save(); ctx.strokeStyle = C.text; ctx.lineWidth = 2.2; ctx.setLineDash([6, 5]); ctx.lineCap = 'round';
+    const end = lerp(LAUNCH - 1, WEEKS, o.cf);
+    ctx.beginPath(); ctx.moveTo(X(LAUNCH - 1), Y(WT[LAUNCH - 2]));
+    for (let w = LAUNCH; w <= Math.floor(end); w++) ctx.lineTo(X(w), Y(WC[w-1] + GAP));
+    if (end < WEEKS){ const w = Math.floor(end), f = end - w, a = w < LAUNCH ? WT[w-1] : WC[w-1] + GAP; ctx.lineTo(X(w + f), Y(lerp(a, WC[w] + GAP, f))); }
+    ctx.stroke(); ctx.restore();
+  }
+  const line = (arr, col, lw) => {
+    if (o.k <= 1) return;
+    ctx.save(); ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(X(1), Y(arr[0]));
+    for (let i = 2; i <= Math.floor(o.k); i++) ctx.lineTo(X(i), Y(arr[i-1]));
+    const w = Math.floor(o.k), f = o.k - w, ve = w >= WEEKS ? arr[WEEKS-1] : lerp(arr[w-1], arr[w], f);
+    ctx.lineTo(X(Math.min(WEEKS, o.k)), Y(ve)); ctx.stroke();
+    ctx.beginPath(); ctx.arc(X(Math.min(WEEKS, o.k)), Y(ve), 4, 0, Math.PI*2); ctx.fill(); ctx.restore();
+  };
+  line(WC, C.A, 2.5); line(WT, C.B, 3);
+  return { X, Y, xl };
+}
+
+// ---------- block contents (local coords: 0..BW, 0..BH) ----------
+function cSetup(lt){
+  alpha(P(lt, .2, .6, eout), () => {
+    const w1 = chip('T · 40 stores · free delivery', 24, 76, { size:12, font:SANS, w:700, color:C.B, fill:'rgba(47,91,255,.08)', stroke:'rgba(47,91,255,.35)', h:26 });
+    chip('C · 40 stores · no change', 24 + w1 + 8, 76, { size:12, font:SANS, w:700, color:C.text, h:26 });
+  });
+  const g = { x0:62, x1:440, y0:124, y1:246, lo:95, hi:150, ticks:[100, 125, 150] };
+  weekChart(g, { axis:P(lt, .5, .9), launch:P(lt, 3.2, 3.6), launchLabel:true, k: 1 + 15 * P(lt, .9, 5.6, lin), cf:0, shade:0 });
+  alpha(P(lt, 6.0, 6.5, eout), () => {
+    text('Q:', 24, 306, { size:17, w:800 });
+    text('how many orders did free delivery add?', 50, 306, { size:17, w:600 });
+  });
+}
+
+function cTrap1(lt){
+  const y0 = 96, y1 = 228, lo = 100, hi = 148, Y = v => lerp(y1, y0, (v - lo)/(hi - lo)), xa = 80, xb = 196;
+  alpha(P(lt, .2, .5), () => {
+    seg(xa, y0 - 6, xa, y1 + 6, 1, C.line, 1.5); seg(xb, y0 - 6, xb, y1 + 6, 1, C.line, 1.5);
+    text('before', xa, y1 + 26, { size:12, w:700, font:MONO, color:C.muted, align:'center' });
+    text('after', xb, y1 + 26, { size:12, w:700, font:MONO, color:C.muted, align:'center' });
+  });
+  // treated slope
+  const kT = P(lt, .5, 1.5);
+  if (kT > 0){ seg(xa, Y(CELL.Tpre), xb, Y(CELL.Tpost), kT, C.B, 3.5); dot(xa, Y(CELL.Tpre), 6, C.B); if (kT >= 1) dot(xb, Y(CELL.Tpost), 6, C.B); }
+  alpha(P(lt, 1.2, 1.6), () => {
+    text('124.6', xa - 12, Y(CELL.Tpre) + 4, { size:12, w:700, font:MONO, color:C.B, align:'right' });
+    text('142.6', xb + 12, Y(CELL.Tpost) + 4, { size:12, w:700, font:MONO, color:C.B });
+  });
+  const fade = P(lt, 4.6, 5.2);
+  alpha(P(lt, 1.6, 2.1, eout), () => {
+    text('TREATED STORES', 270, 104, { size:12, w:700, font:MONO, color:C.muted, ls:1 });
+    const col = fade > .5 ? C.dim : C.B;
+    text('+18.0 ?', 270, 148, { size:36, w:800, color:col });
+    text('“free delivery worked!”', 270, 170, { size:13, w:500, color:C.muted });
+    strike(268, 268 + measure('+18.0', 36, 800), 136, P(lt, 4.6, 5.2), C.amber);
+  });
+  // control slope (no treatment!)
+  const kC = P(lt, 2.8, 3.8);
+  if (kC > 0){ seg(xa, Y(CELL.Cpre), xb, Y(CELL.Cpost), kC, C.A, 3, [7, 6]); dot(xa, Y(CELL.Cpre), 5, C.A); if (kC >= 1) dot(xb, Y(CELL.Cpost), 5, C.A); }
+  alpha(P(lt, 3.5, 3.9), () => {
+    text('105.3', xa - 12, Y(CELL.Cpre) + 4, { size:12, w:700, font:MONO, color:C.muted, align:'right' });
+    text('115.0', xb + 12, Y(CELL.Cpost) + 4, { size:12, w:700, font:MONO, color:C.muted });
+  });
+  alpha(P(lt, 3.8, 4.3, eout), () => {
+    text('CONTROL STORES', 270, 202, { size:12, w:700, font:MONO, color:C.muted, ls:1 });
+    text('+9.7', 270, 234, { size:28, w:800, color:C.text });
+    text('…with no free delivery!', 270, 256, { size:13, w:600, color:C.muted });
+  });
+  alpha(P(lt, 5.4, 5.9, eout), () => warn('✗ Summer lifted every store: the trend took credit', 24, 286));
+}
+
+function cTrap2(lt){
+  const x0 = 56, x1 = 440, lo = 100, hi = 150, X = v => lerp(x0, x1, (v - lo)/(hi - lo));
+  alpha(P(lt, .2, .5), () => {
+    ctx.save(); ctx.strokeStyle = C.line; ctx.lineWidth = 1;
+    [100, 125, 150].forEach(v => { ctx.beginPath(); ctx.moveTo(X(v), 84); ctx.lineTo(X(v), 262); ctx.stroke();
+      text(String(v), X(v), 278, { size:11, w:500, font:MONO, color:C.dim, align:'center' }); });
+    ctx.restore();
+  });
+  const row = (y, lab, c, tv, k, lbl, la) => {
+    alpha(P(k, 0, .3), () => text(lab, 24, y - 30, { size:12, w:700, font:MONO, color:C.muted, ls:1 }));
+    if (k <= 0) return;
+    seg(X(c), y, X(tv), y, P(k, .2, 1), C.text, 4);
+    dot(X(c), y, 8, C.A); if (k > .9) dot(X(tv), y, 8, C.B);
+    alpha(P(k, .5, 1), () => {
+      text(c.toFixed(1), X(c), y + 26, { size:12, w:700, font:MONO, color:C.muted, align:'center' });
+      text(tv.toFixed(1), X(tv), y + 26, { size:12, w:700, font:MONO, color:C.B, align:'center' });
+    });
+    alpha(la, () => lbl((X(c) + X(tv))/2, y - 16));
+  };
+  const fade = P(lt, 4.6, 5.2);
+  row(132, 'AFTER', CELL.Cpost, CELL.Tpost, P(lt, .5, 1.6, lin), (cx, y) => {
+    text('+27.6 ?', cx, y, { size:24, w:800, align:'center', color: fade > .5 ? C.dim : C.text });
+    const w = measure('+27.6', 24, 800), xs = cx - measure('+27.6 ?', 24, 800)/2;
+    strike(xs - 2, xs + w + 2, y - 8, fade, C.amber);
+  }, P(lt, 1.6, 2.1));
+  row(222, 'BEFORE', CELL.Cpre, CELL.Tpre, P(lt, 2.8, 3.9, lin), (cx, y) => {
+    text('+19.3 already', cx, y, { size:18, w:800, align:'center' });
+  }, P(lt, 3.9, 4.4));
+  alpha(P(lt, 5.4, 5.9, eout), () => warn('✗ Treated stores were always busier: selection', 24, 290));
+}
+
+function cTable(lt){
+  const cx = [178, 290, 404], rows = [{ y:122, lab:'T', col:C.B, a:CELL.Tpre, b:CELL.Tpost, d:'+18.0' }, { y:174, lab:'C', col:C.A, a:CELL.Cpre, b:CELL.Cpost, d:'+9.7' }];
+  alpha(P(lt, .2, .5), () => {
+    ['BEFORE', 'AFTER', 'Δ'].forEach((h, i) => text(h, cx[i], 96, { size:12, w:700, font:MONO, color:C.muted, align:'center', ls:1 }));
+  });
+  rows.forEach((r, j) => {
+    alpha(P(lt, .4 + j*.3, .9 + j*.3, eout), () => {
+      text(r.lab === 'T' ? 'Treated' : 'Control', 24, r.y + 24, { size:15, w:700, color: r.lab === 'T' ? C.B : C.text });
+      [r.a, r.b].forEach((v, i) => { card(cx[i] - 50, r.y, 100, 38, { fill:C.card2, r:10, stroke:'none' });
+        text(v.toFixed(1), cx[i], r.y + 25, { size:18, w:700, align:'center' }); });
+    });
+    alpha(P(lt, 1.8 + j*.8, 2.3 + j*.8, eout), () => {
+      card(cx[2] - 52, r.y, 104, 38, { fill: r.lab === 'T' ? 'rgba(47,91,255,.08)' : C.card2, r:10, stroke: r.lab === 'T' ? 'rgba(47,91,255,.4)' : C.line });
+      text(r.d, cx[2], r.y + 25, { size:19, w:800, align:'center', color: r.lab === 'T' ? C.B : C.text });
+    });
+    // little arrow from after -> delta
+    const k = P(lt, 1.5 + j*.8, 2.0 + j*.8);
+    if (k > 0){ seg(cx[1] + 54, r.y + 19, cx[2] - 56, r.y + 19, k, C.dim, 2); if (k >= 1) arrowHead([cx[2] - 56, r.y + 19], 0, C.dim, 8); }
+  });
+  const k = P(lt, 4.0, 4.7, eout);
+  alpha(k, () => {
+    ctx.save(); ctx.translate(0, (1 - k) * 10);
+    card(24, 230, BW - 48, 50, { fill:'#15171C', stroke:'#15171C', r:12 });
+    text('DiD  =  18.0 − 9.7  =', 44, 262, { size:17, w:700, font:MONO, color:'#C9C3B6' });
+    text('+8.3', BW - 44, 265, { size:28, w:800, color:'#FFFFFF', align:'right' });
+    ctx.restore();
+  });
+  alpha(P(lt, 5.4, 5.9, eout), () => text('Row Δ removes the size gap · minus control removes summer', BW/2, 306, { size:13, w:600, color:C.muted, align:'center' }));
+}
+
+function cReg(lt){
+  alpha(P(lt, .2, .7, eout), () => {
+    const parts = [['Y = ', C.text], ['β₀', C.text], [' + ', C.muted], ['β₁', C.text], ['·T', C.muted], [' + ', C.muted], ['β₂', C.text], ['·Post', C.muted], [' + ', C.muted], ['β₃', C.B], ['·T·Post', C.B]];
+    let x = 24; parts.forEach(([s, c]) => { text(s, x, 104, { size:21, w:800, color:c }); x += measure(s, 21, 800); });
+    text('T = treated store (0/1) · Post = week ≥ 9 (0/1)', 24, 126, { size:12, w:500, color:C.muted });
+  });
+  const rows = [['β₀', '105.3', 'control, before', 'baseline'], ['β₁', '+19.3', 'treated − control, before', 'Trap #2'], ['β₂', '+9.7', 'common time trend', 'Trap #1'], ['β₃', '+8.3', 'effect of free delivery', 'DiD']];
+  rows.forEach(([b, v, d, tag], i) => {
+    const y = 140 + i * 31, hl = i === 3;
+    alpha(P(lt, 1.0 + i*.5, 1.5 + i*.5, eout), () => {
+      card(24, y, BW - 48, 27, { fill: hl ? 'rgba(47,91,255,.08)' : C.card2, r:8, stroke: hl ? 'rgba(47,91,255,.45)' : 'none' });
+      text(b, 38, y + 19, { size:15, w:800, color: hl ? C.B : C.text });
+      text(v, 128, y + 19, { size:15, w:800, font:MONO, color: hl ? C.B : C.text, align:'right' });
+      text(d, 144, y + 18, { size:13, w: hl ? 700 : 500, color: hl ? C.text : C.muted });
+      text(tag, BW - 36, y + 18, { size:11, w:700, font:MONO, color: tag.startsWith('Trap') ? C.amber : hl ? C.B : C.dim, align:'right' });
+    });
+  });
+  let cx = 24;
+  [['SE 0.65', C.text, 0], ['95% CI [7.0, 9.6]', C.text, 0], ['✓ p < 0.001', C.green, 1]].forEach(([s, col, g], i) => {
+    const w = measure(s, 13, 700, MONO) + 24;
+    alpha(P(lt, 4.2 + i*.35, 4.6 + i*.35, eout), () => chip(s, cx, 278, { size:13, w:700, h:30, color:col, fill: g ? 'rgba(15,138,95,.12)' : C.card2, stroke: g ? 'rgba(15,138,95,.5)' : null }));
+    cx += w + 10;
+  });
+}
+
+function cPicture(lt){
+  const g = { x0:62, x1:396, y0:88, y1:216, lo:98, hi:150, ticks:[100, 125, 150] };
+  const m = weekChart(g, { axis:1, launch:1, launchLabel:false, k: 1 + 15 * P(lt, .1, .9, lin), cf:P(lt, 1.0, 2.4, lin), shade:P(lt, 2.6, 3.2) });
+  alpha(P(lt, 1.6, 2.0), () => text('dashed = no free delivery', (m.xl + g.x1)/2 + 4, m.Y(121.5), { size:11, w:600, color:C.text, align:'center' }));
+  // bracket for the effect at week 16
+  alpha(P(lt, 3.0, 3.4), () => {
+    // average after launch: treated 142.6 vs counterfactual 115.0 + 19.3 = 134.3 -> +8.3
+    const x = g.x1 + 12, ya = m.Y(CELL.Tpost), yb = m.Y(CELL.Cpost + GAP);
+    ctx.save(); ctx.strokeStyle = C.B; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 5, ya); ctx.lineTo(x, ya); ctx.lineTo(x, yb); ctx.lineTo(x - 5, yb); ctx.stroke(); ctx.restore();
+    text('avg', x + 6, (ya + yb)/2 - 6, { size:11, w:700, font:MONO, color:C.muted });
+    text('+8.3', x + 6, (ya + yb)/2 + 12, { size:15, w:800, color:C.B });
+  });
+  alpha(P(lt, 3.6, 4.0, eout), () => {
+    chip('pre-trends p=0.53', 60, 92, { size:12, font:SANS, w:700, color:C.green, fill:'rgba(15,138,95,.10)', stroke:'rgba(15,138,95,.45)', h:24, padX:27 });
+    check(75, 104, 14, C.green, P(lt, 3.8, 4.2), 2.5);
+  });
+  [['+8.3', 'orders/store/wk', C.B], ['+6.2%', 'vs counterfactual', C.B], ['2.2×', 'naive overstates', C.amber]].forEach(([v, k, col], i) => {
+    alpha(P(lt, 4.4 + i*.3, 4.9 + i*.3, eout), () => {
+      const w = 135, x = 24 + i * (w + 10);
+      card(x, 248, w, 64, { fill:C.card2, r:12, stroke:'none' });
+      text(v, x + w/2, 276, { size:22, w:800, align:'center', color:col });
+      text(k, x + w/2, 299, { size:12, w:500, align:'center', color:C.muted });
+    });
+  });
+}
+
+const CONTENT = [cSetup, cTrap1, cTrap2, cTable, cReg, cPicture];
+
+function block(i, t){
+  const b = BLOCKS[i], [s, e] = TIMES[i];
+  const appear = P(t, .3 + i*.12, .9 + i*.12, eout);
+  if (appear <= 0) return;
+  const state = t < s ? 'pending' : t < e ? 'active' : 'done';
+  const act = P(t, s - .2, s + .3) * (1 - P(t, e - .2, e + .3));
+  alpha(appear, () => {
+    ctx.save(); ctx.translate(b.x, b.y + (1 - appear) * 14);
+    ctx.save();
+    ctx.shadowColor = `rgba(21,23,28,${.06 + .10*act})`; ctx.shadowBlur = 26 + 18*act; ctx.shadowOffsetY = 8 + 6*act;
+    rr(0, 0, BW, BH, 20); ctx.fillStyle = C.card; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 1.5 + act; ctx.strokeStyle = act > .05 ? `rgba(21,23,28,${.25 + .75*act})` : C.line; ctx.stroke();
+    ctx.restore();
+    const done = state === 'done', dk = P(t, e, e + .4, eout);
+    ctx.save(); ctx.beginPath(); ctx.arc(38, 40, 17, 0, Math.PI*2);
+    ctx.fillStyle = done ? 'rgba(15,138,95,.18)' : state === 'active' ? C.text : C.card2; ctx.fill();
+    if (done){ ctx.strokeStyle = C.green; ctx.lineWidth = 2; ctx.stroke(); }
+    ctx.restore();
+    if (done) check(38, 41, 18, C.green, dk, 3);
+    else text(String(i + 1).padStart(2, '0'), 38, 41, { size:13, w:700, font:MONO, align:'center', base:'middle', color: state === 'active' ? '#fff' : C.muted });
+    text(b.title, 66, 48, { size:24, w:800, color: state === 'pending' ? C.muted : C.text });
+    if (b.trap && state !== 'pending') chip(b.sub, BW - 24, 28, { size:12, w:700, color:C.amber, fill:'rgba(184,98,0,.12)', align:'right', h:24 });
+    else text(b.sub, BW - 24, 46, { size:14, w:500, color: state === 'pending' ? C.dim : C.muted, align:'right' });
+    if (state === 'pending'){
+      ctx.save(); ctx.strokeStyle = 'rgba(140,132,118,.35)'; ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
+      rr(24, 82, BW - 48, BH - 106, 12); ctx.stroke(); ctx.restore();
+    } else {
+      CONTENT[i](t - s);
+    }
+    ctx.restore();
+  });
+}
+
+function connectors(t){
+  CONN.forEach((pts, i) => {
+    const ap = P(t, .3 + i*.12, .9 + i*.12);
+    alpha(ap, () => {
+      ctx.save(); ctx.strokeStyle = C.dim; ctx.lineWidth = 2; ctx.setLineDash([5, 6]); ctx.lineJoin = 'round';
+      drawPoly(pts, 1); ctx.restore();
+      const k = P(t, TIMES[i][1] - .4, TIMES[i][1] + .4);
+      if (k > 0){
+        ctx.save(); ctx.strokeStyle = C.text; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        const at = drawPoly(pts, k); ctx.restore();
+        arrowHead(at.p, at.ang, C.text, 11);
+      }
+    });
+  });
+  const tr = (t - 55) / 3.2;
+  if (tr > 0 && tr < 1){
+    const sg = Math.min(4, Math.floor(tr * 5)), f = tr * 5 - sg, pts = CONN[sg];
+    const at = polyAt(pts, polyLen(pts) * eio(f));
+    ctx.save(); const g = ctx.createRadialGradient(at.p[0], at.p[1], 0, at.p[0], at.p[1], 22);
+    g.addColorStop(0, 'rgba(21,23,28,.7)'); g.addColorStop(1, 'rgba(21,23,28,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(at.p[0], at.p[1], 22, 0, Math.PI*2); ctx.fill(); ctx.restore();
+  }
+}
+
+function footer(t){
+  alpha(P(t, 54.3, 55.3, eout), () =>
+    text('Never just before/after  ·  Difference twice  ·  Check parallel trends', W/2, 1330, { size:19, w:600, align:'center', color:C.muted }));
+}
+
+function render(t){
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  background(); header(t); connectors(t);
+  for (let i = 0; i < 6; i++) block(i, t);
+  footer(t);
+}
+
+// ---------- playback ----------
+const RENDER = new URLSearchParams(location.search).has('render');
+if (RENDER) document.body.classList.add('render');
+window.TOTAL = TOTAL;
+window.renderAt = t => render(t);
+window.ready = Promise.all(['800','700','600','500'].map(w => document.fonts.load(`${w} 40px Inter`))
+  .concat(['700','500'].map(w => document.fonts.load(`${w} 20px "JetBrains Mono"`)))).catch(() => {}).then(() => { render(0); return true; });
+
+if (!RENDER){
+  const btn = document.getElementById('play'), scrub = document.getElementById('scrub'), tl = document.getElementById('time');
+  let playing = true, t = 0, last = null;
+  const loop = now => {
+    if (last == null) last = now;
+    const dt = (now - last) / 1000; last = now;
+    if (playing){ t += dt; if (t >= TOTAL) t = 0; }
+    render(t); scrub.value = Math.round(t / TOTAL * 1000); tl.textContent = `${t.toFixed(1)}s / ${TOTAL}s`;
+    requestAnimationFrame(loop);
+  };
+  window.ready.then(() => requestAnimationFrame(loop));
+  btn.onclick = () => { playing = !playing; btn.textContent = playing ? 'Pause' : 'Play'; };
+  cv.onclick = btn.onclick;
+  scrub.oninput = () => { t = scrub.value / 1000 * TOTAL; };
+}
+})();
+</script>
+</body>
+</html>

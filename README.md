@@ -42,6 +42,13 @@ ps = propensity_scores(covariates, treated)
 standardized_mean_differences(covariates, treated, ipw_weights(ps, treated))  # balance check
 ```
 
+## Visual explainers
+
+`visuals/did_pre_post/` is a one-minute animated explainer of pre/post analysis with a DiD
+regression (`did_pre_post.mp4`). Every number on screen comes from `did_numbers.py`, which
+simulates the store panel and runs `diff_in_diff`. Re-render with `node render.js` from that
+folder (Playwright + ffmpeg).
+
 ## Development
 
 ```bash
