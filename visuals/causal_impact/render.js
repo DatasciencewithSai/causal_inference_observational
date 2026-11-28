@@ -1,12 +1,14 @@
 // Render an explainer page to MP4 (30 fps, H.264) frame by frame. Default page: causal_impact.html (1080x1350).
 // Copied from experimentation_ab_testing/visuals/ab_test_flow/render.js.
-// Usage: [PAGE=page.html] node render.js [out.mp4] [fps]  |  [PAGE=page.html] node render.js --stills dir t1 t2 ...
+// Usage: [PAGE=page.html[?story=name]] node render.js [out.mp4] [fps]  |  [PAGE=page.html] node render.js --stills dir t1 t2 ...
 const { chromium } = require('playwright');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const page_url = 'file://' + path.join(__dirname, process.env.PAGE || 'causal_impact.html') + '?render=1';
+// PAGE may carry its own query, e.g. PAGE='causal_impact.html?story=feature'
+const [page_file, page_query] = (process.env.PAGE || 'causal_impact.html').split('?');
+const page_url = 'file://' + path.join(__dirname, page_file) + '?' + (page_query ? page_query + '&' : '') + 'render=1';
 
 (async () => {
   const browser = await chromium.launch();

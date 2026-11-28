@@ -55,9 +55,12 @@ regression (`did_pre_post.mp4`). Every number on screen comes from `did_numbers.
 simulates the store panel and runs `diff_in_diff`. Re-render with `node render.js` from that
 folder (Playwright + ffmpeg).
 
-`visuals/causal_impact/` is a one-minute animated explainer of CausalImpact (`causal_impact.mp4`).
-Every number on screen comes from `impact_numbers.py`, which simulates the campaign and runs
-`causal_impact`. Re-render with `node render.js` from that folder (Playwright + ffmpeg).
+`visuals/causal_impact/` has two one-minute animated explainers of CausalImpact, from one page:
+a TV ad in one city (`causal_impact.mp4`) and a product feature shipped to all iOS users with no
+A/B test (`causal_impact_feature.mp4`). `impact_numbers.py` simulates each story, runs
+`causal_impact`, checks the on-screen arithmetic and writes `<story>.data.js`, which the page
+loads (`causal_impact.html?story=feature`). Re-render from that folder with
+`PAGE='causal_impact.html?story=feature' node render.js causal_impact_feature.mp4` (Playwright + ffmpeg).
 
 ## Development
 
