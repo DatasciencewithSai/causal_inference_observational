@@ -12,9 +12,10 @@ Sister repos: [experimentation_ab_testing](https://github.com/DatasciencewithSai
 |---|---|---|
 | `causal.did` | Difference-in-differences (2x2), cluster-robust SEs | Parallel trends |
 | `causal.propensity` | Propensity scores, IPW average treatment effect, covariate balance (SMD) | No unmeasured confounding, overlap |
+| `causal.impact` | CausalImpact-style time-series counterfactual (local level + control series, exact Bayesian intervals) | Controls unaffected; pre-period relationship holds |
 
 Planned (see [docs/ROADMAP.md](docs/ROADMAP.md)): event-study DiD, synthetic control, market matching,
-regression discontinuity, Bayesian structural time series (CausalImpact-style), matching estimators.
+regression discontinuity, matching estimators.
 
 ## Install
 
@@ -26,6 +27,7 @@ pip install -e ".[dev]"
 
 ```python
 from causal import (
+    causal_impact,
     diff_in_diff,
     ipw_ate,
     propensity_scores,
@@ -40,6 +42,10 @@ diff_in_diff(y, treated=is_treated_group, post=is_after_launch, clusters=unit_id
 ipw_ate(y, treated, X=covariates)  # ATE with bootstrap CI
 ps = propensity_scores(covariates, treated)
 standardized_mean_differences(covariates, treated, ipw_weights(ps, treated))  # balance check
+
+# CausalImpact-style: one treated series, control series the intervention didn't touch
+r = causal_impact(y_market, X=control_markets, n_pre=70)  # first 70 steps are pre-period
+r.effect, r.ci_low, r.ci_high, r.cumulative, r.relative_effect
 ```
 
 ## Visual explainers
@@ -48,6 +54,13 @@ standardized_mean_differences(covariates, treated, ipw_weights(ps, treated))  # 
 regression (`did_pre_post.mp4`). Every number on screen comes from `did_numbers.py`, which
 simulates the store panel and runs `diff_in_diff`. Re-render with `node render.js` from that
 folder (Playwright + ffmpeg).
+
+`visuals/causal_impact/` has two one-minute animated explainers of CausalImpact, from one page:
+a TV ad in one city (`causal_impact.mp4`) and a product feature shipped to all iOS users with no
+A/B test (`causal_impact_feature.mp4`). `impact_numbers.py` simulates each story, runs
+`causal_impact`, checks the on-screen arithmetic and writes `<story>.data.js`, which the page
+loads (`causal_impact.html?story=feature`). Re-render from that folder with
+`PAGE='causal_impact.html?story=feature' node render.js causal_impact_feature.mp4` (Playwright + ffmpeg).
 
 ## Development
 

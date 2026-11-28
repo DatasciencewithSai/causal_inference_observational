@@ -6,7 +6,7 @@
 - [ ] Synthetic control
 - [ ] Market matching (time-series distance to pick control markets) — see Experimentation_guide notes
 - [ ] Regression discontinuity (local linear, bandwidth selection)
-- [ ] Bayesian structural time series (CausalImpact-style)
+- [x] Bayesian structural time series (CausalImpact-style): local level + regression, exact grid posterior
 - [ ] Matching estimators (nearest neighbor on propensity / covariates)
 - [ ] Doubly robust (AIPW) estimator
 - [ ] Example notebooks per method
